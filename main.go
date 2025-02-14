@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/lestrrat-go/iter/arrayiter"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
@@ -33,39 +34,39 @@ func middleware(next http.Handler) http.Handler {
 		authHeader := r.Header.Get("Authorization")
 
 		jwt := strings.Split(authHeader, "Bearer ")[1]
+		// TODO: handle case where no JWT is provided
 
 		keyset, err := ar.Fetch(ctx, certsUrl)
 		if err != nil {
 			log.Panic("Error loading Fetching JWKS")
 		}
 
-		var hasVerified = false
-
-		// TODO: Just use the appropriate key
+		// Finding key pair with RS256 algorithm
+		var pair *arrayiter.Pair
 		for it := keyset.Iterate(context.Background()); it.Next(context.Background()); {
-			pair := it.Pair()
-			key := pair.Value.(jwk.Key)
-		
-			var rawkey interface{} // This is the raw key, like *rsa.PrivateKey or *ecdsa.PrivateKey
-			if err := key.Raw(&rawkey); err != nil {
-				log.Printf("failed to create public key: %s", err)
+			alg := it.Pair().Value.(jwk.Key).Algorithm()
+			if alg == "RS256" {
+				pair = it.Pair()
 				break
 			}
-
-			_, err := jws.Verify([]byte(jwt), jwa.RS256, rawkey)
-
-			if err != nil {
-				
-			} else {
-				hasVerified = true
-			}
 		}
 
-		if(hasVerified) {
-			next.ServeHTTP(w, r)
-		} else {
+		var rawkey interface{}
+		key := pair.Value.(jwk.Key)
+		if err := key.Raw(&rawkey); err != nil {
+			fmt.Fprintf(w,"failed to create public key: %s", err)
+			return
+		}
+
+		_, verifyErr := jws.Verify([]byte(jwt), jwa.RS256, rawkey)
+
+		if verifyErr != nil {
 			fmt.Fprintf(w, "Invalid token")
+		} else {
+			next.ServeHTTP(w, r)
 		}
+
+
 
 	})
 
